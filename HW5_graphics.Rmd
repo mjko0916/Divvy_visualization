@@ -1,0 +1,646 @@
+---
+title: "HW5_graphics"
+author: "Myungji Ko"
+output:
+  html_document:
+    df_print: paged
+    keep_md: true
+---
+
+<style>
+  @import url('https://fonts.googleapis.com/css?family=Nanum+Gothic|Roboto|Source+Code+Pro&subset=korean');
+
+body{ /* Normal  */
+    font-size: 15px;
+  font-family: 'Nanum Gothic', sans-serif;
+}
+
+h1.title {
+  font-size: 38px;
+  font-family: 'Roboto', sans-serif;
+  color : #523020
+}
+
+h2 { /* Header 2 */
+    font-size: 25px;
+  font-family: 'Roboto', sans-serif;
+  color: #32496E;
+}
+
+h3 { /* Header 3 */
+    font-size: 20px;
+  font-family: 'Roboto', sans-serif;
+  color: #32496E;
+  
+}
+
+code.r{ /* Code block */
+    font-size: 12px;
+}
+</style>
+
+## 필요한 library  
+```{r, results='hide' ,message=FALSE,  warning=FALSE}
+#install.packages(c("ggthemes", "magrittr", "data.table", "stringr", "rvest", "janitor", "lubridate", "ggmap", "gganimate", "leaflet", "leaflet.extras"))
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(stringr)
+# Fetching
+library(rvest)
+# Cleaning column names
+library(janitor)
+# Date/Time formatting
+library(lubridate)
+# Maps
+library(ggmap)
+library(sf)
+# Used for animated density plots
+library(gganimate)
+# Only needed for interactive maps
+library(leaflet)
+library(leaflet.extras)
+library(readxl)
+library(gridExtra)
+library(RColorBrewer)
+library(googleway)
+```
+
+## 자료 불러오기 
+```{r}
+setwd("C:/Users/User/Desktop/대학원/3학기/통계 그래픽스/과제/HW4")
+rides2015<-rbind(read.csv("Divvy_Trips_2015-Q1Q2/Divvy_Trips_2015-Q1.csv"),
+                 read.csv("Divvy_Trips_2015-Q1Q2/Divvy_Trips_2015-Q2.csv"),
+                 read.csv("Divvy_Trips_2015_Q3Q4/Divvy_Trips_2015_07.csv"),
+                 read.csv("Divvy_Trips_2015_Q3Q4/Divvy_Trips_2015_08.csv"),
+                 read.csv("Divvy_Trips_2015_Q3Q4/Divvy_Trips_2015_09.csv"),
+                 read.csv("Divvy_Trips_2015_Q3Q4/Divvy_Trips_2015_Q4.csv"))
+station2015<-read.csv("Divvy_Trips_2015-Q1Q2/Divvy_Stations_2015.csv")
+weather2015 <- read.csv("C:/Users/User/Desktop/대학원/3학기/통계 그래픽스/과제/HW5/725340-14819-2015/725340-14819-2015.csv", sep="")
+```
+
+## 자료 변환
+1. rides
+```{r}
+# Age
+rides2015$age <- 2015-rides2015$birthyear
+c(min(rides2015$age, na.rm=T), max(rides2015$age, na.rm=T))
+rides2015$age_bin <- rides2015$age %>% .bincode(seq(0,120,20))
+rides2015$age_bin <- sapply(rides2015$age_bin,function(bin) {
+  return(paste0((bin-1)*20,"-",(bin*20)," Years Old"))
+})
+rides2015$age_bin<-factor(rides2015$age_bin,levels=c("0-20 Years Old","20-40 Years Old","40-60 Years Old","60-80 Years Old","80-120 Years Old","NA-NA Years Old"))
+
+# Time
+rides2015$starttime<-strptime(as.character(rides2015$starttime),format="%m/%d/%Y %H:%M")
+rides2015$stoptime<-strptime(as.character(rides2015$stoptime),format="%m/%d/%Y %H:%M")
+rides2015$starttime <- as.POSIXct(rides2015$starttime)
+rides2015$stoptime <- as.POSIXct(rides2015$stoptime)
+
+## t시간 변수 만들기 
+# Trip times
+rides2015$minutes <- rides2015$tripduration/60
+rides2015$hours <- rides2015$tripduration/60/60
+# Start times
+rides2015$start_hour <- lubridate::hour(rides2015$starttime)
+rides2015$mm <- hour(rides2015$starttime)*60 + minute(rides2015$starttime)
+rides2015$start_day <- wday(rides2015$starttime,label =  T, abbr = F, week_start = 1)
+# Weekend/Weekday
+rides2015$start_day_type <- ifelse(wday(rides2015$starttime, week_start = 1)>5, "Weekend", "Weekday")
+# Day of Year
+rides2015$day <- yday(rides2015$starttime)
+# Week of year
+rides2015$week <- week(rides2015$starttime)
+# Month (1-12)
+rides2015$month <- month(rides2015$starttime,label = T,abbr = F)
+# Month (January-December)
+rides2015$month_text <- month(rides2015$starttime,label = T,abbr = F)
+# Remove unused levels from factor
+rides2015$month_text <- droplevels(rides2015$month_text)
+rides2015
+```
+
+2. station - join with rides2015
+```{r}
+station2015 <- station2015 %>% select(-name)
+rides2015 <- rides2015 %>%
+  left_join(station2015,by=c("from_station_id"="id"))
+colnames(rides2015)[25:28]<-c("from_station_latitude","from_station_longitude","from_dpcapacity", "from_landmark")
+rides2015 <- rides2015 %>%
+  left_join(station2015,by=c("to_station_id"="id"))
+colnames(rides2015)[29:32]<-c("to_station_latitude","to_station_longitude","to_dpcapacity","to_landmark")
+
+rides2015
+```
+
+3. weather
+```{r}
+for (i in 1:ncol(weather2015)){
+  weather2015[,i] <- ifelse(weather2015[,i]==-9999, NA, weather2015[,i])
+}
+colnames(weather2015) <- c("year", "month", "day", "hour", "temp", "dew_temp", "slp", "wd", "wsr", "sctcc", "per", "per_six")
+summary(weather2015)
+# NA 많은 열 제거
+weather2015 <- weather2015[,-c(10,12)]
+# 시간 변수들 합치기
+weather2015 <- weather2015 %>% 
+  unite(time, year:hour, sep = "-")
+weather2015$time<-strptime(as.character(weather2015$time),format="%Y-%m-%d-%H")
+weather2015$time <- as.POSIXct(weather2015$time)
+weather2015$month <- month(weather2015$time,label = T,abbr = F)
+weather2015[,c(2,3,6)] <- weather2015[,c(2,3,6)]/10
+weather2015
+```
+
+## Distribution
+- Age
+```{r}
+ggplot(rides2015) + geom_histogram(aes(age)) +
+  theme_bw() + ggtitle("2015 Trip duration distribution") +
+  geom_vline(xintercept=80, col=2)
+```
+
+- Age정보는 usertype이 Subscriber일 때 얻어진다.  
+- age 정보를 이용할 때는 80세 이하부터 보도록 한다.   
+
+- Tripduration 
+```{r}
+ggplot(rides2015) + geom_histogram(aes(tripduration)) +
+  theme_bw() + ggtitle("2015 Trip duration distribution") +
+  geom_vline(xintercept=4000, col=2)
+ggplot(rides2015 %>% filter(tripduration<=4000)) +
+  geom_histogram(aes(tripduration)) + theme_bw() +
+  ggtitle("2015 Trip duration distribution less than 4000")
+rides2015 %>% filter(tripduration>4000) %>% group_by(usertype) %>% summarise(n=n())
+```
+
+자전거를 빌린 기간이 긴 usertype은 Customer 그룹이 Subscriber보다 많다.
+
+- usertype
+```{r}
+rides2015 %>% group_by(usertype) %>% summarise(n=n())
+rides2015 <- rides2015 %>% filter(usertype!="Dependent")
+```
+
+Dependent 수가 적기 때문에 제외하였다.
+
+## Age of riders
+```{r}
+ggplot(data=rides2015 %>% filter(age<=80), 
+       aes(x=week, fill=month_text)) + 
+  geom_histogram(alpha=.9, binwidth=1) + 
+  theme_fivethirtyeight() + 
+  ggtitle("2015 Ride Frequency") +
+  facet_grid(.~age_bin,scale="free") +
+  scale_fill_viridis_d()
+
+## Usertype ~ Age
+ggplot(data=rides2015 %>% filter(age<=80), 
+       aes(x=week, fill=month_text)) + 
+  geom_histogram(alpha=.9, bins=53) + 
+  theme_fivethirtyeight() + 
+  ggtitle("2015 Ride Frequency") + facet_grid(usertype~age_bin,scale="free") + 
+  scale_fill_viridis_d()
+
+## Usertype & start_day_type & Age
+ggplot(rides2015 %>% filter(age<=80),
+       aes(x=mm, fill= age_bin)) +
+  geom_density(alpha=.6) +
+  scale_x_continuous(labels = c("5am","8am","1:30pm","5pm","8pm"),
+                     breaks = c(300,480,750,1020,1200)) + 
+  labs(fill="",title="NiceRide 2015 Start Times") + 
+  theme_fivethirtyeight() +
+  theme(strip.background = element_rect(fill = "#FFFFFF")) +
+  scale_fill_viridis_d(option="A") +
+  facet_grid(usertype~start_day_type)
+```
+
+- 확실히 20대~40대에서 많이 빌리는 것을 볼 수 있다.   
+- Subscriber 그룹은 주로 주중 출퇴근 시간에, Customer 그룹은 주로 주말 낮 시간에 더 많이 빌리는 것을 알 수 있다.  
+- Subscriber 그룹은 주중에는 출퇴근 시간, 주말에는 낮에 많이 빌린다.  
+- 주목할 점은 어떤 usertype이든지 상관없이 주말 새벽에 빌리는 사람이 있다는 것이다. 이것은 뒤에 더 자세히 살펴보도록 한다.
+
+## Each day
+```{r}
+rides2015 %>% mutate(day1=day(starttime)) %>% filter(day1==1) %>% 
+  group_by(month) %>%
+  select(day1, day, month) %>% summarise(first(day))
+
+ggplot() +
+  geom_area(data=rides2015, 
+            aes(x=day, y=..count.., fill=usertype),
+            stat="bin", alpha=0.6) +
+  scale_fill_viridis_d() +
+  scale_x_continuous(labels = c("Jan","Feb","Mar","Apr","May","June","July","Aug","Sep",
+                                "Oct","Nov","Dec"),
+                     breaks = c(1,32,60,91,121,152,182,213,244,274,305,335)) +
+  labs(fill="",title="2015 Trips on each day") +
+  theme_fivethirtyeight() +
+  facet_grid(usertype~.)
+```
+
+- Subscriber 그룹은 8월에 정점을 찍으며, Customer 그룹은 7월에 정점을 찍는다.  
+- 겨울에는 Customer 그룹은 거의 자전거를 타지 않는다.  
+
+## Trips on each weekday
+```{r}
+ggplot() + 
+  geom_histogram(data=rides2015, 
+                 aes(x=start_day, fill=usertype), 
+                 stat="count", alpha=0.6) +
+  facet_grid(usertype~., scales="free") + 
+  labs(fill="",title="2015 Trips on each weekday") +
+  theme_fivethirtyeight()
+```
+
+- Customer 그룹은 주로 주말에, Subscriber 그룹은 주로 주중에 많이 타는 것을 알 수 있다.  
+
+### heatmap
+```{r}
+rides2015_naomit <- na.omit(rides2015)
+df.heatmap.weekday <- list()
+df.heatmap.weekday$weekday <- rides2015_naomit %>%
+  filter(start_day_type=="Weekday") %>%
+  group_by(from_station_longitude, from_station_latitude) %>%
+  summarize(intensity = sqrt(n()))
+names(df.heatmap.weekday$weekday)[1:2] <- c("longitude","latitude")
+
+df.heatmap.weekday$weekend <- rides2015_naomit %>% 
+  filter(start_day_type=="Weekend") %>%
+  group_by(from_station_longitude, from_station_latitude) %>%
+  summarize(intensity = sqrt(n()))
+names(df.heatmap.weekday$weekend)[1:2] <- c("longitude","latitude")
+
+df.heatmap.weekday$weekday$pos <- "weekday"
+df.heatmap.weekday$weekend$pos <- "weekend"
+
+df.heatmap.weekday %<>% rbindlist(fill = T)
+leaflet(df.heatmap.weekday) %>% 
+  addProviderTiles(providers$CartoDB.DarkMatter) %>%
+  addHeatmap(data = df.heatmap.weekday %>% filter(pos=="weekday"),
+             lng=~longitude, 
+             lat=~latitude, 
+             intensity = ~intensity,
+             blur = 10, 
+             max = 100, radius = 15,
+             layerId = "weekday", group = "weekday") %>%
+  addHeatmap(data = df.heatmap.weekday %>% filter(pos=="weekend"),
+             lng=~longitude, 
+             lat=~latitude, 
+             intensity = ~intensity,
+             blur = 10, 
+             max = 100, radius = 15,
+             layerId = "weekend", group = "weekend") %>%
+  addLayersControl(
+    baseGroups = c("weekday", "weekend"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+```
+
+- 주말의 면적이 주중의 면적보다 작다.
+
+## 주말 새벽
+- gender
+```{r}
+rides2015_am <- rides2015 %>% filter(mm<=300 & start_day_type=="Weekend")
+rides2015_am %>% group_by(usertype, gender) %>% summarise(n=n())
+# Subscriber만
+ggplot() +
+  geom_density(data=rides2015_am %>% 
+                 filter(usertype=="Subscriber"), 
+                 aes(x=mm, fill="Total"), stat="count", alpha=0.6) +
+  geom_density(data=rides2015_am %>% 
+                 filter(usertype=="Subscriber"&gender=="Male"), 
+                 aes(x=mm, fill="Male"),  stat="count", alpha=0.6) +
+  geom_density(data=rides2015_am %>% 
+                 filter(usertype=="Subscriber"&gender=="Female"), 
+                 aes(x=mm, fill="Female"),  stat="count", alpha=0.6) + 
+  scale_fill_viridis_d(option="A") +
+  scale_x_continuous(labels = c("1am", "2am", "3am", "4am", "5am"),
+                     breaks = c(60, 120, 180, 240, 300)) +
+  labs(fill="",title="Trips on Weekend(Subscriber)") +
+  theme_fivethirtyeight()
+```
+
+대부분 남자가 빌렸다는 것을 알 수 있다.
+
+- month
+```{r}
+ggplot(rides2015_am) +
+  geom_boxplot(aes(x=month, y=mm)) + 
+  labs(title="Trips on Weekend") +
+  theme_fivethirtyeight()
+```
+
+월과는 상관이 없어 보인다.
+
+- age
+```{r}
+ggplot(rides2015_am %>% filter(age<=80)) + 
+  geom_histogram(aes(x=start_hour, fill=age_bin), stat="count", position="dodge") +
+  labs(x="",fill="",title="Trips on Weekend") +
+  scale_x_discrete(
+    breaks = c(0,1,2,3,4,5),
+    labels=c("12~1am","1~2am","2~3am","3~4am","4~5am","5~6am")) +
+  theme_fivethirtyeight() +
+  scale_fill_viridis_d()
+```
+
+대부분 20~40대
+
+- usertype
+```{r}
+rides2015_am %>% group_by(usertype) %>% summarise(n=n())
+```
+
+전체 데이터에서는 Subscriber 그룹이 훨씬 많았지만 주말 새벽에는 거의 비슷하다.
+
+## Top Stations
+```{r}
+rides2015 %>%
+  group_by(from_station_name) %>%
+  summarize(freq = n()) %>%
+  top_n(10) %>%
+  ggplot(aes(reorder(from_station_name, freq), y = freq, fill = freq)) +   
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Pick-up Station") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_fivethirtyeight() + 
+  theme(legend.position ='none', axis.text.y = element_text(size = 12)) + 
+  scale_fill_gradientn(name = '',colours = rev(brewer.pal(10,'Spectral'))) +
+  ggtitle("Top 10 Pick-up Stations")
+
+rides2015 %>%
+  group_by(to_station_name) %>%
+  summarize(freq = n()) %>%
+  top_n(10) %>%
+  ggplot(aes(reorder(to_station_name, freq), y = freq, fill = freq)) +   
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Pick-up Station") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_fivethirtyeight() + 
+  theme(legend.position ='none', axis.text.y = element_text(size = 12)) + 
+  scale_fill_gradientn(name = '',colours = rev(brewer.pal(10,'Spectral'))) +
+  ggtitle("Top 10 Put-down Stations")
+```
+
+- top 10 stations(전체)
+```{r}
+rides2015_naomit <- na.omit(rides2015)
+df.lines2015 <- rides2015_naomit %>%
+  group_by(from_station_longitude,
+           from_station_latitude,
+           to_station_longitude,
+           to_station_latitude,
+           from_station_name,
+           to_station_name) %>%
+  summarize(rides = n())
+highlights <- arrange(df.lines2015, desc(rides))[1:10,]
+highlights
+
+mpls2015 <- get_map(c(left = min(rides2015_naomit$from_station_longitude), 
+                  bottom = min(rides2015_naomit$from_station_latitude), 
+                  right = max(rides2015_naomit$from_station_longitude), 
+                  top = max(rides2015_naomit$from_station_latitude)),
+                maptype='terrain', source='stamen', zoom=13)
+
+ggmap(mpls2015,darken = c(.8,"#FFFFFF")) + 
+  geom_segment(data = df.lines2015,
+               aes(x = from_station_longitude, 
+                   y = from_station_latitude,
+                   xend = to_station_longitude,
+                   yend = to_station_latitude,
+                   alpha = sqrt(rides)),
+               color = "#000000") + coord_cartesian() +
+  scale_alpha(range = c(0.0001, .5)) +
+  geom_point(data = df.lines2015 %>% 
+               group_by(longitude = from_station_longitude,
+                        latitude = from_station_latitude) %>%
+               summarize(rides = sum(rides)),
+             aes(x = longitude, 
+                 y = latitude,
+                 size = rides),
+             color="#009900",alpha=.4) + 
+  geom_point(data = highlights,
+             aes(x = from_station_longitude, 
+                 y = from_station_latitude,
+                 size = rides*1.5),
+             color="red",alpha=.4) +
+  scale_size_continuous(range(4,100)) +
+  scale_color_viridis_c() + 
+  scale_fill_viridis_c() + 
+  theme_nothing()
+```
+
+- top 10 stations(주말 새벽)
+```{r}
+rides2015_am_naomit <- na.omit(rides2015_am)
+df.lines2015_am <- rides2015_am_naomit %>%
+  group_by(from_station_longitude,
+           from_station_latitude,
+           to_station_longitude,
+           to_station_latitude,
+           from_station_name,
+           to_station_name) %>%
+  summarize(rides = n())
+df.lines2015_am$region <- 1:nrow(df.lines2015_am)
+df.lines2015_am_from <- df.lines2015_am[,c(1,2,5,7,8)]
+colnames(df.lines2015_am_from) <- c("longitude", "latitude","name", "rides", "region")
+df.lines2015_am_to <- df.lines2015_am[,c(3,4,6,7,8)]
+colnames(df.lines2015_am_to) <- c("longitude", "latitude", "name", "rides", "region")
+df.lines2015_am2 <- rbind(df.lines2015_am_from, df.lines2015_am_to)
+df.lines2015_am2$region <- as.factor(df.lines2015_am2$region)
+highlights <- arrange(df.lines2015_am, desc(rides))[1:10,]
+highlights
+highlights2 <- arrange(df.lines2015_am2, desc(rides))[1:20,]
+
+map <- leaflet() %>%
+  addTiles() %>% 
+  setView(median(highlights2$longitude), 
+          median(highlights2$latitude),
+          zoom = 11) %>%
+  addMarkers(data = highlights, 
+                    lng = ~from_station_longitude,
+             lat = ~from_station_latitude, 
+             popup = ~paste(paste("from:", from_station_name),
+                            paste("rides:", rides),sep="<br/>")) %>%
+  addAwesomeMarkers(data = highlights, lng = ~to_station_longitude,
+             lat = ~to_station_latitude, 
+             popup = ~paste(paste("to:", to_station_name),
+                            paste("rides:", rides),sep="<br/>"),
+             icon = awesomeIcons(markerColor="green")) %>%
+  addCircleMarkers(data=df.lines2015_am2, lng = ~longitude, lat = ~latitude, opacity = 0.5, radius = ~rides/2, popup = ~rides)
+for(group in levels(highlights2$region)){
+  map = addPolylines(map, 
+                      lng= ~ longitude,
+                      lat= ~ latitude,
+                      data = highlights2[highlights2$region == group,], color="red")
+}
+map
+```
+
+
+## Trip Duration
+- 전체
+```{r}
+ggplot(rides2015 %>% filter(age<=80&tripduration<=4000)) + 
+  geom_density(aes(tripduration, fill=age_bin), alpha=0.6) +
+  facet_grid(usertype~start_day_type) + 
+  theme_fivethirtyeight() + 
+  labs(fill="", title="2015 Trip Duration") +
+  scale_fill_viridis_d(option="A") +
+  scale_x_continuous(
+    labels = c("5 minutes","10 minutes","20 minutes","30 minutes","50 miutes"),
+    breaks = c(300, 600, 1200, 1800, 3000)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(rides2015 %>% filter(age<=80&tripduration>4000)) + 
+  geom_density(aes(tripduration, fill=age_bin), alpha=0.6) +
+  facet_grid(usertype~start_day_type) + 
+  theme_fivethirtyeight() + 
+  labs(fill="", title="2015 Trip Duration(after 1hour)") +
+  scale_fill_viridis_d(option="A") +
+  scale_x_continuous(
+    labels = c("1hour","10 hour"),
+    breaks = c(3600, 36000))
+
+ggplot(rides2015 %>% filter(tripduration>4000)) + 
+  geom_density(aes(tripduration, fill=usertype), alpha=0.6) +
+  facet_grid(.~start_day_type) + 
+  theme_fivethirtyeight() + 
+  labs(fill="", title="2015 Trip Duration(after 1hour)") +
+  scale_fill_viridis_d(option="A") +
+  scale_x_continuous(
+    labels = c("1hour","10 hour"),
+    breaks = c(3600, 36000))
+```
+
+- Subscriber 그룹은 요일에 상관없이 짧은 시간만 빌리는 것을 알 수 있다.  
+- Customer 그룹은 주말에 특히 많이 빌리는데, 40~60대가 20~40대보다 더 많이 빌린다.  
+- Subscriber은 주중보다 주말에 tripduration이 1시간보다 긴 경우가 더 많은데, 40대-60대가 가장 많다.   
+- tripduration이 1시간보다 더 길 때는 Customer 그룹이 Subscriber 그룹보다 더 많다.  
+
+### Customer & Weekend에서 trip duration이 높은 역을 찾아보자
+```{r}
+top_dur <- rides2015 %>% 
+  filter(usertype=="Customer" & start_day_type=="Weekend") %>% 
+  group_by(from_station_name, to_station_name, from_landmark, to_landmark) %>% 
+  summarise(mean_dur=mean(tripduration)) %>% 
+  arrange(desc(mean_dur))
+top_dur[1:10,]
+```
+
+## Calender Heatmap
+```{r}
+library(ggTimeSeries)
+# Generate frequency table
+df.cal <- rides2015$starttime %>% as_date() %>% table %>% data.frame
+names(df.cal) <- c("Date","Rides")
+df.cal$Date %<>% as_date
+
+ggplot_calendar_heatmap(
+  df.cal,
+  'Date',
+  'Rides'
+) + theme_fivethirtyeight() + 
+  theme(legend.position = "right",
+        legend.direction = "vertical") + 
+  scale_fill_viridis_c()
+
+df_w <- weather2015
+df_w$Date <- as_date(df_w$time)
+df_w <- df_w %>% group_by(Date) %>%
+  summarise("temperature" = mean(temp),
+            "precipitation" = sum(per)) 
+
+# Temperature  
+ggplot_calendar_heatmap(
+  df_w,
+  'Date',
+  'temperature'
+) + theme_fivethirtyeight() + 
+  theme(legend.position = "right",
+        legend.direction = "vertical") + 
+  scale_fill_viridis_c()
+
+# Precipitation
+ggplot_calendar_heatmap(
+  df_w,
+  'Date',
+  'precipitation'
+) + theme_fivethirtyeight() + 
+  theme(legend.position = "right",
+        legend.direction = "vertical") + 
+  scale_fill_viridis_c()
+
+```
+
+자전거를 많이 빌리는 날에도 강수량이 높은 날에는 많이 안 타는 것으로 보인다.  
+
+## Weather
+```{r}
+df <- left_join(df_w, df.cal)
+df$month <- month(df$Date,label = T,abbr = F)
+ggplot(df, aes(x=temperature, y=Rides)) + geom_point() +
+  geom_smooth(se=F) +
+  theme_fivethirtyeight() +
+  ggtitle("2015 Rides")
+ggplot(df %>% filter(precipitation>0), 
+       aes(x=precipitation, y=Rides)) + geom_point() +
+  theme_fivethirtyeight() +
+  ggtitle("2015 Rides")
+```
+
+- 기온이 높아짐에 따라 자전거 타는 횟수도 많아진다. 20도까지는 급격하게 증가하다가 그 이후에는 점점 증가량이 감소한다.  
+- 강수량과 자전거 타는 양이 크게 연관이 없어보인다.
+
+## 7, 8, 9월 더 자세히
+```{r}
+df_many <- df %>% filter(month %in% c("7월", "8월", "9월"))
+gg1 <- ggplot_calendar_heatmap(
+  df_many,
+  'Date',
+  'Rides'
+) + theme_fivethirtyeight() + 
+  theme(legend.position = "right",
+        legend.direction = "vertical") + 
+  scale_fill_viridis_c()
+
+# Temperature  
+gg2<-ggplot_calendar_heatmap(
+  df_many,
+  'Date',
+  'temperature'
+) + theme_fivethirtyeight() + 
+  theme(legend.position = "right",
+        legend.direction = "vertical") + 
+  scale_fill_viridis_c()
+
+# Precipitation
+gg3 <- ggplot_calendar_heatmap(
+  df_many,
+  'Date',
+  'precipitation'
+) + theme_fivethirtyeight() + 
+  theme(legend.position = "right",
+        legend.direction = "vertical") + 
+  scale_fill_viridis_c()
+
+gg1;gg2;gg3
+
+ggplot(data=df_many) +
+  geom_point(aes(x=precipitation, y=Rides)) +
+  facet_grid(.~month) +
+  theme_fivethirtyeight() + 
+  ggtitle("2015 Rides Frequency")
+  
+```
+
+제일 많이 타는 7, 8, 9월만 따로 보았다. 가장 두드러지는 점은 강수량의 Heatmap과 Rides의 Heatmap의 밝은부분과 어두운 부분이 반대로 나타난다는 것이다. 전반적으로 강수량이 증가하면 자전거를 타는 횟수도 줄어듦을 알 수 있다.
+
+
